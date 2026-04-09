@@ -10,13 +10,28 @@
 
 ## Pipeline tools
 
-- [FastQC](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/)
+- [Dorado](https://dorado-docs.readthedocs.io/en/latest/)
 
-> Andrews, S. (2010). FastQC: A Quality Control Tool for High Throughput Sequence Data [Online].
+- [Minimap2](https://github.com/lh3/minimap2)
 
-- [MultiQC](https://pubmed.ncbi.nlm.nih.gov/27312411/)
+> Li, H. (2021). New strategies to improve minimap2 alignment accuracy. Bioinformatics, 37(23), 4572–4574. https://doi.org/10.1093/bioinformatics/btab705
 
-> Ewels P, Magnusson M, Lundin S, Käller M. MultiQC: summarize analysis results for multiple tools and samples in a single report. Bioinformatics. 2016 Oct 1;32(19):3047-8. doi: 10.1093/bioinformatics/btw354. Epub 2016 Jun 16. PubMed PMID: 27312411; PubMed Central PMCID: PMC5039924.
+- [Oarfish](https://github.com/COMBINE-lab/oarfish)
+
+> Jousheghani ZZ, Patro R. (2024). Oarfish: Enhanced probabilistic modeling leads to improved accuracy in long read transcriptome quantification. bioRxiv, 2024.02.28.582591. https://doi.org/10.1101/2024.02.28.582591
+
+- [Samtools](https://github.com/samtools/samtools)
+
+> Danecek, P., Bonfield, J. K., Liddle, J., Marshall, J., Ohan, V., Pollard, M. O., Whitwham, A., Keane, T., McCarthy, S. A., Davies, R. M., & Li, H. (2021). Twelve years of SAMtools and BCFtools. GigaScience, 10(2), giab008. https://doi.org/10.1093/gigascience/giab008
+
+- [seqkit](https://bioinf.shenwei.me/seqkit/)
+
+> Shen, W., Le, S., Li, Y., Hu, F. (2016). SeqKit: A Cross-Platform and Ultrafast Toolkit for FASTA/Q File Manipulation. PLoS ONE, 11(10), e0163962. https://doi.org/10.1371/journal.pone.0163962
+
+- [ontime](https://github.com/mbhall88/ontime)
+
+> Hall, M. (2024). mbhall88/ontime: v0.3.1 (0.3.1). Zenodo. https://doi.org/10.5281/zenodo.10652351
+
 
 ## Software packaging/containerisation tools
 

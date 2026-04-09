@@ -13,21 +13,62 @@
                 "errorMessage": "Sample name must be provided and cannot contain spaces",
                 "meta": ["id"]
             },
-            "fastq_1": {
+            "project": {
                 "type": "string",
-                "format": "file-path",
-                "exists": true,
-                "pattern": "^([\\S\\s]*\\/)?[^\\s\\/]+\\.f(ast)?q\\.gz$",
-                "errorMessage": "FastQ file for reads 1 must be provided, cannot contain spaces and must have extension '.fq.gz' or '.fastq.gz'"
+                "pattern": "^\\S+$",
+                "errorMessage": "Project ID must be provided and cannot contain spaces"
             },
-            "fastq_2": {
+            "input": {
+                "type": "string",
+                "format": "path",
+                "exists": true,
+                "errorMessage": "pod5, fastq and bam file path must be provided"
+            }
+            "ubam": {
                 "type": "string",
                 "format": "file-path",
                 "exists": true,
-                "pattern": "^([\\S\\s]*\\/)?[^\\s\\/]+\\.f(ast)?q\\.gz$",
-                "errorMessage": "FastQ file for reads 2 cannot contain spaces and must have extension '.fq.gz' or '.fastq.gz'"
-            }
+                "errorMessage": "Absolute path to ubam file path must be provided"
+            },
+            "ref_genome": {
+                "type": "string",
+                "pattern": "^\\S+$",
+                "errorMessage": "Reference genome type must be provided and be either hg38|GRCh38 or hg19|GRCh37"
+            },
+            "ref_genome_path": {
+                "type": "string",
+                "errorMessage": "Glob of path to reference genome fasta and index file must be provided"
+            },
+            "ref_transcriptome": {
+                "type": "string",
+                "pattern": "^\\S+$",
+                "errorMessage": "Reference transcriptome type must be provided and be named as Gencode49 or GRCh38-104, or any other reference used"
+            },
+            "ref_transcriptome_path": {
+                "type": "string",
+                "errorMessage": "Glob of path to reference transcriptome fasta and gtf file must be provided"
+            },
+            "kit": {
+                "type": "string",
+                "enum": [
+                    "SKQ-PCB109",
+                    "SQK-PCB111.24",
+                    "SQK-PCS114.24"
+                    ],
+                "errorMessage": "Valid Barcoding Nanopore kit must be provided"
+            },
+            "barcode": {
+                "type": "string",
+                "pattern": "^\\S+$",
+                "errorMessage": "First column must contain barcode"
+            },
+            "tumor_type": {
+                "type": "string",
+                "pattern": "^\\S+$",
+                "enum": ["all", "aml", "other"],
+                "default": "all"
+            },
         },
-        "required": ["sample", "fastq_1"]
+        "required": ["sample", "input"]
     }
 }

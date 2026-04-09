@@ -1,0 +1,20 @@
+[submodule "modules/modules/local/dorado"]
+	path = modules/modules/local/dorado
+	url = https://github.com/chusj-pigu/wf-modules
+	branch = dorado
+[submodule "modules/local/samtools"]
+	path = modules/local/samtools
+	url = https://github.com/chusj-pigu/wf-modules
+	branch = samtools
+[submodule "modules/local/seqkit"]
+	path = modules/local/seqkit
+	url = https://github.com/chusj-pigu/wf-modules
+	branch = seqkit
+[submodule "modules/local/cramino"]
+	path = modules/local/cramino
+	url = https://github.com/chusj-pigu/wf-modules
+	branch = cramino
+[submodule "modules/local/quarto"]
+	path = modules/local/quarto
+	url = https://github.com/chusj-pigu/wf-modules
+	branch = quarto

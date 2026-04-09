@@ -3,12 +3,13 @@
     IMPORT MODULES / SUBWORKFLOWS / FUNCTIONS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-include { FASTQC                 } from '../modules/nf-core/fastqc/main'
-include { MULTIQC                } from '../modules/nf-core/multiqc/main'
-include { paramsSummaryMap       } from 'plugin/nf-schema'
-include { paramsSummaryMultiqc   } from '../subworkflows/nf-core/utils_nfcore_pipeline'
-include { softwareVersionsToYAML } from '../subworkflows/nf-core/utils_nfcore_pipeline'
-include { methodsDescriptionText } from '../subworkflows/local/utils_nfcore_oncotrseq_pipeline'
+// Basecalling subworkflows
+include { BASECALL_SIMPLEX   } from '../subworkflows/local/basecalling/basecall_simplex'
+include { BASECALL_MULTIPLEX } from '../subworkflows/local/basecalling/basecall_multiplex'
+
+// Core analysis subworkflows
+include { MAPPING            } from '../subworkflows/local/mapping/mapping'
+
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -19,11 +20,78 @@ include { methodsDescriptionText } from '../subworkflows/local/utils_nfcore_onco
 workflow ONCOTRSEQ {
 
     take:
-    ch_samplesheet // channel: samplesheet read in from --input
+    samplesheet             // channel: samplesheet read in from --input
+    demux_samplesheet       // channel : demux samplesheet read in from --demux_samplesheet
+    ref_genome                     // channel : reference for mapping, either empty if skipping mapping, or a path
+    ref_transcriptome
+    basecall_model
+    tumor_type
+
     main:
 
     ch_versions = Channel.empty()
-    ch_multiqc_files = Channel.empty()
+
+    ch_tumor_type = tumor_type
+            .branch { meta, tumor ->
+                all: tumor == "all"
+                aml: tumor == "aml"
+                other: tumor == "other"
+            }
+
+     if (params.skip_mapping) {
+
+        MAPPING (
+            samplesheet,
+            ref_genome
+        )
+
+        ch_seqkit = MAPPING_HG.out.seqkit
+
+    } else if (params.skip_basecalling) {
+
+        MAPPING_HG (
+            samplesheet,
+            ref
+        )
+
+        ch_seqkit = MAPPING_HG.out.seqkit
+    } else {
+
+        if (params.demux) {
+
+            BASECALL_MULTIPLEX (
+                samplesheet,
+                demux_samplesheet
+            )
+
+            MAPPING_HG (
+                BASECALL_MULTIPLEX.out.fastq,
+                ref
+            )
+
+            ch_fastq = BASECALL_MULTIPLEX.out.fastq
+
+            ch_seqkit   = BASECALL_MULTIPLEX.out.stats_pass
+            ch_versions = BASECALL_MULTIPLEX.out.versions
+
+        } else {
+
+            BASECALL_SIMPLEX (
+                samplesheet
+            )
+
+            MAPPING_HG (
+                BASECALL_SIMPLEX.out.fastq,
+                ref
+            )
+
+            ch_fastq = BASECALL_SIMPLEX.out.fastq
+
+            ch_seqkit   = BASECALL_SIMPLEX.out.stats_pass
+            ch_versions = BASECALL_SIMPLEX.out.versions
+        }
+
+
     //
     // MODULE: Run FastQC
     //
