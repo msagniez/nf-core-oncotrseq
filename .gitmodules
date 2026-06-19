@@ -18,3 +18,11 @@
 	path = modules/local/quarto
 	url = https://github.com/chusj-pigu/wf-modules
 	branch = quarto
+[submodule "modules/local/minimap2"]
+	path = modules/local/minimap2
+	url = https://github.com/chusj-pigu/wf-modules
+	branch = minimap2
+[submodule "modules/local/wf-modules"]
+	path = modules/local/wf-modules
+	url = https://github.com/chusj-pigu/wf-modules
+	branch = samtools

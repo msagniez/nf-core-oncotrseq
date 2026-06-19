@@ -7,14 +7,6 @@ include { DORADO_BASECALL                           } from '../../../modules/loc
 include { SAMTOOLS_QSFILTER                         } from '../../../modules/local/samtools/main.nf'
 include { SAMTOOLS_TOFASTQ as SAMTOOLS_TOFASTQ_PASS } from '../../../modules/local/samtools/main.nf'
 include { SAMTOOLS_TOFASTQ as SAMTOOLS_TOFASTQ_FAIL } from '../../../modules/local/samtools/main.nf'
-include { SEQKIT_STATS as SEQKIT_STATS_PASS         } from '../../../modules/local/seqkit/main.nf'
-include { SEQKIT_STATS as SEQKIT_STATS_FAIL         } from '../../../modules/local/seqkit/main.nf'
-include { paramsSummaryMap                          } from 'plugin/nf-schema'
-include { paramsSummaryMultiqc                      } from '../../../subworkflows/nf-core/utils_nfcore_pipeline'
-include { softwareVersionsToYAML                    } from '../../../subworkflows/nf-core/utils_nfcore_pipeline'
-include { methodsDescriptionText                    } from '../../../subworkflows/local/utils_nfcore_oncoseq_pipeline'
-include { modifyMetaId                              } from '../../../subworkflows/local/utils_nfcore_oncoseq_pipeline'
-
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     RUN MAIN WORKFLOW
@@ -31,7 +23,11 @@ workflow BASECALL_SIMPLEX {
 
     ch_versions = channel.empty()
 
-    DORADO_BASECALL(ch_samplesheet)
+    ch_input = ch_samplesheet
+        .map { meta, model, modif, input, _qc_type, ubam ->
+             tuple(meta, input, ubam, model, modif)}
+
+    DORADO_BASECALL(ch_input)
 
     SAMTOOLS_QSFILTER(DORADO_BASECALL.out.ubam)
 
@@ -40,36 +36,28 @@ workflow BASECALL_SIMPLEX {
     ch_ubam_pass = SAMTOOLS_QSFILTER.out.ubam_pass
         .map { meta, ubam ->
             def meta_suffix = ubam.baseName.tokenize('_')[-1].replace('.bam', '')
-            def new_meta = modifyMetaId(meta, 'add_suffix', '', '', "_${meta_suffix}")
-            tuple(new_meta, ubam)
+            def new_meta = meta.id + '_' + meta_suffix
+            tuple(project:meta.project, id:new_meta, ubam)
             }
 
     ch_ubam_fail = SAMTOOLS_QSFILTER.out.ubam_fail
         .map { meta, ubam ->
             def meta_suffix = ubam.baseName.tokenize('_')[-1].replace('.bam', '')
-            def new_meta = modifyMetaId(meta, 'add_suffix', '', '', "_${meta_suffix}")
-            tuple(new_meta, ubam)
+            def new_meta = meta.id + '_' + meta_suffix
+            tuple(project:meta.project, id:new_meta, ubam)
             }
 
     SAMTOOLS_TOFASTQ_PASS(ch_ubam_pass)
     SAMTOOLS_TOFASTQ_FAIL(ch_ubam_fail)
 
-    SEQKIT_STATS_PASS(SAMTOOLS_TOFASTQ_PASS.out.fq)              // Read stats for passed reads
-    SEQKIT_STATS_FAIL(SAMTOOLS_TOFASTQ_FAIL.out.fq)              // Reads stats for failed reads
-
-    ch_stats_pass = SEQKIT_STATS_PASS.out.stats
-        .map { meta, table ->
-        def meta_restore = modifyMetaId(meta, 'remove_suffix', '', '', '_pass')
-        tuple(meta_restore, table)}
-    ch_stats_fail = SEQKIT_STATS_FAIL.out.stats
-        .map { meta, table ->
-        def meta_restore = modifyMetaId(meta, 'remove_suffix', '', '', '_fail')
-        tuple(meta_restore, table)}
-
     ch_fastq = SAMTOOLS_TOFASTQ_PASS.out.fq
-        .map { meta, reads ->
-            def new_meta = modifyMetaId(meta, 'remove_suffix', '', '', '_pass')
-            tuple(new_meta, reads)}
+        .map { meta, fastq ->
+            def meta_restore = meta.id.replace('_pass', '')
+            tuple(project:meta.project, id:meta_restore, fastq) }
+        .join(ch_samplesheet)
+        .map { meta, fastq, model, _modif, _input, qc_type, _ubam ->
+        tuple(meta, fastq, model, qc_type)}
+
 
 
     /*
@@ -81,15 +69,11 @@ workflow BASECALL_SIMPLEX {
         .mix(SAMTOOLS_QSFILTER.out.versions)
         .mix(SAMTOOLS_TOFASTQ_PASS.out.versions)
         .mix(SAMTOOLS_TOFASTQ_FAIL.out.versions)
-        .mix(SEQKIT_STATS_PASS.out.versions)
-        .mix(SEQKIT_STATS_FAIL.out.versions)
 
 
 
     emit:
     fastq          = ch_fastq
-    stats_pass     = ch_stats_pass        // TODO: QUARTO REPORT
-    stats_fail     = ch_stats_fail        // TODO: QUARTO REPORT
     versions       = ch_versions
 
 }

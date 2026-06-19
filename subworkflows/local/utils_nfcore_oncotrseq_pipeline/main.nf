@@ -16,12 +16,36 @@ include { completionSummary         } from '../../nf-core/utils_nfcore_pipeline'
 include { imNotification            } from '../../nf-core/utils_nfcore_pipeline'
 include { UTILS_NFCORE_PIPELINE     } from '../../nf-core/utils_nfcore_pipeline'
 include { UTILS_NEXTFLOW_PIPELINE   } from '../../nf-core/utils_nextflow_pipeline'
+include { SAMTOOLS_FAIDX as SAMTOOLS_FAIDX_GENOME  } from '../../../modules/local/samtools/main.nf'    // indexes the alignment genome (--genome / ref_genome column)
+include { SAMTOOLS_FAIDX as SAMTOOLS_FAIDX_CLASSIF } from '../../../modules/local/samtools/main.nf'    // indexes the classification reference (ref_classif column)
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     SUBWORKFLOW TO INITIALISE PIPELINE
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
+
+// File extensions used to decide whether an input row is raw reads (fastq)
+// or an already-quantified matrix. No basecalling happens in this pipeline,
+// so this is purely a routing decision for downstream classification.
+def FASTQ_EXTENSIONS_REGEX  = /.*\.(fastq|fq)(\.gz)?$/
+def MATRIX_EXTENSIONS_REGEX = /.*\.(csv|tsv)(\.gz)?$/
+
+// Accepted biotypes for classification
+def VALID_BIOTYPES = ['cdna', 'drna']
+
+// Genome ID aliases -> canonical genome key used to name files in --ref_dir / on UCSC.
+// Only used for the alignment genome (ref_genome / --genome), never for ref_classif/gtf.
+def GENOME_ALIAS_MAP = [
+    'hg38'   : 'hg38',
+    'GRCh38' : 'hg38',
+    'hg19'   : 'hg19',
+    'GRCh37' : 'hg19',
+    'hs1'    : 'hs1',
+    'CHM13'  : 'hs1'
+]
+def DEFAULT_GENOME        = 'hg38'
+def UCSC_ALLOWED_GENOMES  = ['hg38', 'hg19', 'hs1']
 
 workflow PIPELINE_INITIALISATION {
 
@@ -64,37 +88,293 @@ workflow PIPELINE_INITIALISATION {
     )
 
     //
-    // Custom validation for pipeline parameters
+    // Resolve a samplesheet value (ref_classif or gtf column) to an existing file.
+    // The column may contain either a full path, or just a filename to be looked
+    // up inside --ref_dir. Always required - no silent fallback.
     //
-    validateInputParameters()
+    def resolveRefFile = { value, label, meta ->
+        if (!value) {
+            throw new IllegalArgumentException(
+                "${label} is required for sample '${meta.id}'"
+            )
+        }
+
+        def direct = file(value)
+        if (direct.exists()) {
+            return direct
+        }
+
+        if (!params.ref_dir) {
+            throw new IllegalArgumentException(
+                "${label} '${value}' is not an existing path for sample '${meta.id}', " +
+                "and --ref_dir is not set to look it up by filename"
+            )
+        }
+
+        def in_ref_dir = file("${params.ref_dir}/${value}")
+        if (!in_ref_dir.exists()) {
+            throw new IllegalArgumentException(
+                "${label} '${value}' was not found as a path, nor as a file named '${value}' " +
+                "in --ref_dir (${params.ref_dir}) for sample '${meta.id}'"
+            )
+        }
+
+        return in_ref_dir
+    }
 
     //
-    // Create channel from input file provided through params.input
+    // Parse samplesheet once and validate every row:
+    //   - the input file (fastq or matrix) must exist
+    //   - biotype must be 'cdna' or 'drna'
+    //   - the input file extension must match either a fastq or a matrix pattern
+    //   - ref_classif and gtf are mandatory and resolved to existing files
+    //     (full path as given, or filename looked up in --ref_dir)
+    // Expected columns: meta, biotype, tumor_type, input_file, ref_genome, ref_classif, gtf
+    // `input_file` is either a fastq (raw reads) or a quantification matrix.
     //
-
-    Channel
+    ch_samplesheet_raw = channel
         .fromList(samplesheetToList(params.input, "${projectDir}/assets/schema_input.json"))
-        .map {
-            meta, fastq_1, fastq_2 ->
-                if (!fastq_2) {
-                    return [ meta.id, meta + [ single_end:true ], [ fastq_1 ] ]
-                } else {
-                    return [ meta.id, meta + [ single_end:false ], [ fastq_1, fastq_2 ] ]
+        .map { meta, biotype, tumor_type, input_file, ref_genome, ref_classif, gtf ->
+
+            if (!input_file.exists()) {
+                throw new IllegalArgumentException(
+                    "Input file not found for sample '${meta.id}': ${input_file}"
+                )
+            }
+
+            if (!(biotype in VALID_BIOTYPES)) {
+                throw new IllegalArgumentException(
+                    "Invalid biotype '${biotype}' for sample '${meta.id}': must be one of ${VALID_BIOTYPES}"
+                )
+            }
+
+            def is_fastq  = input_file.name ==~ FASTQ_EXTENSIONS_REGEX
+            def is_matrix = input_file.name ==~ MATRIX_EXTENSIONS_REGEX
+            if (!is_fastq && !is_matrix) {
+                throw new IllegalArgumentException(
+                    "Unsupported input file '${input_file.name}' for sample '${meta.id}': " +
+                    "expected a fastq (.fastq/.fq[.gz]) or a matrix (.csv/.tsv[.gz])"
+                )
+            }
+
+            // Classification reference (fasta) and its annotation (gtf) are a separate
+            // reference from the alignment genome (ref_genome / genome_fasta below),
+            // and are mandatory for every sample regardless of fastq/matrix.
+            def resolved_ref_classif = resolveRefFile(ref_classif, 'ref_classif', meta)
+            def resolved_gtf         = resolveRefFile(gtf, 'gtf', meta)
+
+            return [ meta, biotype, tumor_type, input_file, ref_genome, resolved_ref_classif, resolved_gtf ]
+        }
+
+    //
+    // Branch into fastq (needs alignment/quantification before classification)
+    // vs matrix (already quantified, goes straight to classification). Extension
+    // was already validated above, so this only routes. ref_classif/gtf are kept
+    // in both branches; only ref_genome (alignment-only) is dropped for matrix.
+    //
+    ch_samplesheet_raw
+        .branch { meta, biotype, tumor_type, input_file, ref_genome, ref_classif, gtf ->
+            fastq:  input_file.name ==~ FASTQ_EXTENSIONS_REGEX
+                return [ meta, biotype, tumor_type, input_file, ref_genome, ref_classif, gtf ]
+            matrix: true
+                return [ meta, biotype, tumor_type, input_file, ref_classif, gtf ]
+        }
+        .set { ch_samplesheet_branched }
+
+    ch_samplesheet_fastq  = ch_samplesheet_branched.fastq
+    ch_samplesheet_matrix = ch_samplesheet_branched.matrix
+
+    ch_samplesheet_fastq.view  { "Fastq input:  ${it}" }
+    ch_samplesheet_matrix.view { "Matrix input: ${it}" }
+
+    /*
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Alignment genome resolution - fastq samples only (matrix samples are already
+    quantified and never need an alignment reference). This is independent from
+    ref_classif/gtf above.
+
+    Priority per sample:
+      1. ref_genome column is an existing FASTA file path     -> used directly
+      2. ref_genome column (or --genome) is a genome ID
+         and --ref_dir is set                                 -> looked up by alias in --ref_dir
+      3. neither set                                          -> fall back to --genome
+         (default 'hg38'); looked up in --ref_dir if set,
+         otherwise downloaded from the UCSC FTP mirror
+
+    Missing .fai indexes are generated below with SAMTOOLS_FAIDX_GENOME.
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    */
+
+    def faExts  = ['.fa', '.fasta', '.fa.gz', '.fasta.gz']
+    def faiExts = ['.fa.fai', '.fasta.fai', '.fa.gz.fai', '.fasta.gz.fai']
+
+    def findFa = { dir, aliases ->
+        dir?.listFiles()?.find { f ->
+            aliases.any { a -> f.name.toLowerCase().contains(a.toLowerCase()) } &&
+            faExts.any { ext -> f.name.toLowerCase().endsWith(ext) }
+        }
+    }
+
+    def findFai = { dir, aliases ->
+        dir?.listFiles()?.find { f ->
+            aliases.any { a -> f.name.toLowerCase().contains(a.toLowerCase()) } &&
+            faiExts.any { ext -> f.name.toLowerCase().endsWith(ext) }
+        }
+    }
+
+    ch_samplesheet_fastq
+        .map { meta, _biotype, _tumor_type, _input_file, ref_genome, _ref_classif, _gtf ->
+
+            def genome_input = ref_genome ?: params.genome
+            def fa  = null
+            def fai = null
+
+            // CASE 1: explicit FASTA path
+            if (genome_input && file(genome_input).exists()) {
+                fa = file(genome_input)
+                def fai_candidate = file("${fa}.fai")
+                fai = fai_candidate.exists() ? fai_candidate : null
+            }
+            // CASE 2: genome ID -> lookup in --ref_dir
+            else if (genome_input) {
+                if (!params.ref_dir) {
+                    throw new IllegalArgumentException(
+                        "Genome '${genome_input}' provided for sample '${meta.id}' but --ref_dir is not set"
+                    )
                 }
+
+                def canonical = GENOME_ALIAS_MAP[genome_input] ?: genome_input
+                def aliases   = [canonical, genome_input]
+                def ref_dir   = file(params.ref_dir)
+
+                fa  = findFa(ref_dir, aliases)
+                fai = findFai(ref_dir, aliases)
+
+                if (!fa) {
+                    throw new IllegalArgumentException(
+                        "Could not find FASTA for genome '${genome_input}' in ${params.ref_dir} (sample: ${meta.id})"
+                    )
+                }
+            }
+            // CASE 3: no genome specified -> default genome, --ref_dir lookup, else UCSC download
+            else {
+                def fallback  = params.genome ?: DEFAULT_GENOME
+                def canonical = GENOME_ALIAS_MAP[fallback] ?: fallback
+
+                if (params.ref_dir) {
+                    def ref_dir = file(params.ref_dir)
+                    fa  = findFa(ref_dir, [canonical])
+                    fai = findFai(ref_dir, [canonical])
+                }
+
+                if (!fa) {
+                    log.warn("No matching genome found in --ref_dir -- staging default genome '${canonical}' from UCSC for sample '${meta.id}'")
+                    if (!UCSC_ALLOWED_GENOMES.contains(canonical)) {
+                        log.warn("Genome '${canonical}' may not exist on the UCSC FTP mirror")
+                    }
+                    fa  = file("ftp://hgdownload.cse.ucsc.edu/goldenPath/${canonical}/bigZips/${canonical}.fa.gz")
+                    fai = null
+                }
+            }
+
+            return tuple(meta, fa, fai)
         }
-        .groupTuple()
-        .map { samplesheet ->
-            validateInputSamplesheet(samplesheet)
+        .set { ch_genome_ref }
+
+    ch_genome_ref
+        .branch { meta, fa, fai ->
+            needs_index: fai == null
+                return [ meta, fa ]
+            has_index: true
+                return [ meta, fa, fai ]
         }
-        .map {
-            meta, fastqs ->
-                return [ meta, fastqs.flatten() ]
+        .set { ch_genome_split }
+
+    ch_genome_needs_index = ch_genome_split.needs_index
+    ch_genome_with_index  = ch_genome_split.has_index
+
+    ch_genome_needs_index.view { "Genome indexing required: ${it}" }
+
+    SAMTOOLS_FAIDX_GENOME (
+        ch_genome_needs_index
+    )
+
+    ch_versions = ch_versions.mix(SAMTOOLS_FAIDX_GENOME.out.versions.first())
+
+    // The module copies/renames the fasta alongside the new .fai and emits both
+    // together as (meta, fasta, fai) - use that directly, no join needed.
+    ch_genome_indexed = SAMTOOLS_FAIDX_GENOME.out.fasta_index
+
+    ch_genome_final = ch_genome_indexed.mix(ch_genome_with_index)
+
+    ch_genome_final.view { "Genome ready: ${it}" }
+
+    /*
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Classification reference indexing - both fastq and matrix samples.
+    ref_classif and gtf were already resolved to existing files above; only the
+    .fai index may still be missing, and is generated here if so.
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    */
+
+    ch_classif_raw = ch_samplesheet_fastq
+        .map { meta, _biotype, _tumor_type, _input_file, _ref_genome, ref_classif, gtf -> [ meta, ref_classif, gtf ] }
+        .mix(
+            ch_samplesheet_matrix
+                .map { meta, _biotype, _tumor_type, _input_file, ref_classif, gtf -> [ meta, ref_classif, gtf ] }
+        )
+
+    ch_classif_raw
+        .branch { meta, ref_classif, gtf ->
+            def fai_candidate = file("${ref_classif}.fai")
+            needs_index: !fai_candidate.exists()
+                return [ meta, ref_classif, gtf ]
+            has_index: true
+                return [ meta, ref_classif, gtf, fai_candidate ]
         }
-        .set { ch_samplesheet }
+        .set { ch_classif_split }
+
+    ch_classif_needs_index = ch_classif_split.needs_index
+    ch_classif_with_index  = ch_classif_split.has_index
+
+    ch_classif_needs_index.view { "Classification reference indexing required: ${it}" }
+
+    SAMTOOLS_FAIDX_CLASSIF (
+        ch_classif_needs_index.map { meta, ref_classif, _gtf -> tuple(meta, ref_classif) }
+    )
+
+    ch_versions = ch_versions.mix(SAMTOOLS_FAIDX_CLASSIF.out.versions.first())
+
+    // The module emits (meta, fasta, fai) but doesn't know about gtf - rejoin it
+    // from the pre-indexing channel, keyed by meta, then reorder to (meta, fasta, gtf, fai).
+    ch_classif_indexed = ch_classif_needs_index
+        .map { meta, _ref_classif, gtf -> tuple(meta, gtf) }
+        .join(SAMTOOLS_FAIDX_CLASSIF.out.fasta_index)
+        .map { meta, gtf, fasta, fai -> tuple(meta, fasta, gtf, fai) }
+
+    ch_classif_final = ch_classif_indexed.mix(ch_classif_with_index)
+
+    ch_classif_final.view { "Classification reference ready: ${it}" }
+
+    //
+    // Extract biotype per sample (both branches)
+    //
+    ch_biotype = ch_samplesheet_fastq
+        .map { meta, biotype, _tumor_type, _input_file, _ref_genome, _ref_classif, _gtf -> [ meta, biotype ] }
+        .mix(
+            ch_samplesheet_matrix
+                .map { meta, biotype, _tumor_type, _input_file, _ref_classif, _gtf -> [ meta, biotype ] }
+        )
+
+    ch_biotype.view { "Biotype: ${it}" }
 
     emit:
-    samplesheet = ch_samplesheet
-    versions    = ch_versions
+    fastq                        = ch_samplesheet_fastq
+    matrix                       = ch_samplesheet_matrix
+    genome_fasta                 = ch_genome_final          // (meta, fasta, fai)        - alignment genome, fastq only
+    ref_classif                  = ch_classif_final          // (meta, fasta, gtf, fai)   - classification reference, all samples
+    biotype                      = ch_biotype
+    versions                     = ch_versions
 }
 
 /*
@@ -112,11 +392,9 @@ workflow PIPELINE_COMPLETION {
     outdir          //    path: Path to output directory where results will be published
     monochrome_logs // boolean: Disable ANSI colour codes in log output
     hook_url        //  string: hook URL for notifications
-    multiqc_report  //  string: Path to MultiQC report
 
     main:
     summary_params = paramsSummaryMap(workflow, parameters_schema: "nextflow_schema.json")
-    def multiqc_reports = multiqc_report.toList()
 
     //
     // Completion email and summary
@@ -130,7 +408,7 @@ workflow PIPELINE_COMPLETION {
                 plaintext_email,
                 outdir,
                 monochrome_logs,
-                multiqc_reports.getVal(),
+                []
             )
         }
 
@@ -260,4 +538,41 @@ def methodsDescriptionText(mqc_methods_yaml) {
     def description_html = engine.createTemplate(methods_text).make(meta)
 
     return description_html.toString()
+}
+
+//
+// Function to modify metadata id field in a flexible way
+// This is a generalized function that can handle various metadata transformations
+//
+def modifyMetaId(Map meta, String operation, String search_string = '', String replace_string = '', def suffix = '') {
+    // Clone metadata and normalize to strings
+    def new_meta = meta.collectEntries { k, v -> [k, v?.toString()] }
+
+    switch(operation) {
+        case 'remove_suffix':
+            if (new_meta.id && suffix) {
+                new_meta.id = new_meta.id.replaceFirst(suffix.toString(), '')
+            }
+            break
+
+        case 'add_suffix':
+            if (new_meta.id && suffix) {
+                new_meta.id = new_meta.id + suffix
+            }
+            break
+
+        case 'replace':
+            if (new_meta.id && search_string) {
+                new_meta.id = new_meta.id.replace(search_string, replace_string ?: '')
+            }
+            break
+
+        case 'prefix':
+            if (new_meta.id && suffix) {
+                new_meta.id = suffix + new_meta.id
+            }
+            break
+    }
+
+    return new_meta
 }
