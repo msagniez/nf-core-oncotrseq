@@ -80,11 +80,6 @@ workflow {
     ch_samplesheet_matrix = PIPELINE_INITIALISATION.out.matrix
     ch_genome_fasta        = PIPELINE_INITIALISATION.out.genome_fasta
 
-    ch_samplesheet_fastq.view  { "Fastq samplesheet channel:  ${it}" }
-    ch_samplesheet_matrix.view { "Matrix samplesheet channel: ${it}" }
-    ch_genome_fasta.view       { "Genome fasta channel: ${it}" }
-    PIPELINE_INITIALISATION.out.ref_classif.view { "Reference classification channel: ${it}" }
-    PIPELINE_INITIALISATION.out.biotype.view { "Biotype channel: ${it}" }
 
     ONCOTRSEQ (
         ch_samplesheet_fastq,

@@ -47,6 +47,8 @@ def GENOME_ALIAS_MAP = [
 def DEFAULT_GENOME        = 'hg38'
 def UCSC_ALLOWED_GENOMES  = ['hg38', 'hg19', 'hs1']
 
+
+
 workflow PIPELINE_INITIALISATION {
 
     take:
@@ -184,8 +186,6 @@ workflow PIPELINE_INITIALISATION {
     ch_samplesheet_fastq  = ch_samplesheet_branched.fastq
     ch_samplesheet_matrix = ch_samplesheet_branched.matrix
 
-    ch_samplesheet_fastq.view  { "Fastq input:  ${it}" }
-    ch_samplesheet_matrix.view { "Matrix input: ${it}" }
 
     /*
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -220,6 +220,22 @@ workflow PIPELINE_INITIALISATION {
             aliases.any { a -> f.name.toLowerCase().contains(a.toLowerCase()) } &&
             faiExts.any { ext -> f.name.toLowerCase().endsWith(ext) }
         }
+    }
+
+    def getReferenceName = { fa, genome_input ->
+        if (genome_input && GENOME_ALIAS_MAP.containsKey(genome_input)) {
+                return GENOME_ALIAS_MAP[genome_input]
+        }
+
+        def name = fa?.name ?: ''
+
+        for (entry in GENOME_ALIAS_MAP) {
+            if (name.toLowerCase().contains(entry.key.toLowerCase())) {
+                return entry.value
+            }
+        }
+
+        return name.replaceFirst(/\.fa(sta)?(\.gz)?$/, '')
     }
 
     ch_samplesheet_fastq
@@ -277,37 +293,46 @@ workflow PIPELINE_INITIALISATION {
                 }
             }
 
-            return tuple(meta, fa, fai)
+            def ref = getReferenceName(fa, genome_input ?: params.genome)
+            return tuple(meta, ref, fa, fai)
+
         }
         .set { ch_genome_ref }
 
     ch_genome_ref
-        .branch { meta, fa, fai ->
+        .branch { meta, ref, fa, fai ->
             needs_index: fai == null
-                return [ meta, fa ]
+                return [ meta, ref, fa ]
             has_index: true
-                return [ meta, fa, fai ]
+                return [ meta, ref, fa, fai ]
         }
         .set { ch_genome_split }
 
     ch_genome_needs_index = ch_genome_split.needs_index
     ch_genome_with_index  = ch_genome_split.has_index
 
-    ch_genome_needs_index.view { "Genome indexing required: ${it}" }
 
     SAMTOOLS_FAIDX_GENOME (
-        ch_genome_needs_index
+        ch_genome_needs_index.map { meta, ref, fa ->
+            tuple(meta, fa)
+        }
     )
 
     ch_versions = ch_versions.mix(SAMTOOLS_FAIDX_GENOME.out.versions.first())
 
     // The module copies/renames the fasta alongside the new .fai and emits both
     // together as (meta, fasta, fai) - use that directly, no join needed.
-    ch_genome_indexed = SAMTOOLS_FAIDX_GENOME.out.fasta_index
+    ch_genome_indexed = ch_genome_needs_index
+        .map { meta, ref, _fa ->
+            tuple(meta, ref)
+        }
+        .join(SAMTOOLS_FAIDX_GENOME.out.fasta_index)
+        .map { meta, ref, fasta, fai ->
+            tuple(meta, ref, fasta, fai)
+        }
 
     ch_genome_final = ch_genome_indexed.mix(ch_genome_with_index)
 
-    ch_genome_final.view { "Genome ready: ${it}" }
 
     /*
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -337,8 +362,6 @@ workflow PIPELINE_INITIALISATION {
     ch_classif_needs_index = ch_classif_split.needs_index
     ch_classif_with_index  = ch_classif_split.has_index
 
-    ch_classif_needs_index.view { "Classification reference indexing required: ${it}" }
-
     SAMTOOLS_FAIDX_CLASSIF (
         ch_classif_needs_index.map { meta, ref_classif, _gtf -> tuple(meta, ref_classif) }
     )
@@ -354,7 +377,6 @@ workflow PIPELINE_INITIALISATION {
 
     ch_classif_final = ch_classif_indexed.mix(ch_classif_with_index)
 
-    ch_classif_final.view { "Classification reference ready: ${it}" }
 
     //
     // Extract biotype per sample (both branches)
@@ -366,12 +388,11 @@ workflow PIPELINE_INITIALISATION {
                 .map { meta, biotype, _tumor_type, _input_file, _ref_classif, _gtf -> [ meta, biotype ] }
         )
 
-    ch_biotype.view { "Biotype: ${it}" }
 
     emit:
     fastq                        = ch_samplesheet_fastq
     matrix                       = ch_samplesheet_matrix
-    genome_fasta                 = ch_genome_final          // (meta, fasta, fai)        - alignment genome, fastq only
+    genome_fasta                 = ch_genome_final          // (meta, ref, fasta, fai)        - alignment genome, fastq only
     ref_classif                  = ch_classif_final          // (meta, fasta, gtf, fai)   - classification reference, all samples
     biotype                      = ch_biotype
     versions                     = ch_versions
@@ -575,4 +596,25 @@ def modifyMetaId(Map meta, String operation, String search_string = '', String r
     }
 
     return new_meta
+}
+
+def getReferenceName = { fa, genome_input ->
+
+    // First try explicit genome aliases
+    if (genome_input && GENOME_ALIAS_MAP.containsKey(genome_input)) {
+        return GENOME_ALIAS_MAP[genome_input]
+    }
+
+    def name = fa?.name ?: ''
+
+    // Check whether filename contains a known alias
+    for (entry in GENOME_ALIAS_MAP) {
+        if (name.toLowerCase().contains(entry.key.toLowerCase())) {
+            return entry.value
+        }
+    }
+
+    // Fallback: strip fasta extensions
+    return name
+        .replaceFirst(/\.fa(sta)?(\.gz)?$/, '')
 }

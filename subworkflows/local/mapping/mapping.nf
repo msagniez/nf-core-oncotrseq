@@ -43,7 +43,7 @@ workflow MAPPING {
 
     ch_ref = ref
         .map { meta, ref, ref_fasta, _ref_fai ->
-            tuple(meta, ref, ref_fasta) }
+            tuple(meta, ref_fasta) }
 
     in_ch
         .map { meta, reads ->
@@ -63,12 +63,17 @@ workflow MAPPING {
         }
         .set { in_ch }
 
+    in_ch.view { "Input channel: ${it}" }
+    ch_ref.view { "Reference channel: ${it}" }
+
     ch_mapping_in = in_ch
         .join(ch_ref)
-        .map { meta, fastq, ref, ref_fasta ->
-            def meta_ref = modifyMetaId(meta, 'add_suffix', '', '', "_${ref}")
-            tuple(meta_ref, fastq, ref_fasta)
-            }
+        //.map { meta, fastq, ref, ref_fasta ->
+        //    def meta_ref = modifyMetaId(meta, 'add_suffix', '', '', "_${ref}")
+        //    tuple(meta_ref, fastq, ref_fasta)
+        //    }
+
+    ch_mapping_in.view { "Mapping input channel: ${it}" }
 
     // Run minimap2 alignment
     MINIMAP2_ALIGN(ch_mapping_in)

@@ -29,16 +29,16 @@ workflow ONCOTRSEQ {
     ch_versions = Channel.empty()
     ch_mapping = Channel.empty()
 
-    samplesheet_fastq.view { "Fastq samplesheet channel: ${it}" }
-    samplesheet_matrix.view { "Matrix samplesheet channel: ${it}" }
-    genome_fasta.view { "Genome fasta channel: ${it}" }
-    ref_classif.view { "Reference classification channel: ${it}" }
-    biotype.view { "Biotype channel: ${it}" }
 
-    //MAPPING (
-    //    ch_samplesheet,
-    //    ch_ref
-    //)
+    ch_samplesheet = samplesheet_fastq.map { meta, biotype, tumor_type, input, ref_genome, ref_rna, gtf ->
+        tuple(meta, input)
+    }
+
+
+    MAPPING (
+        ch_samplesheet,
+        genome_fasta
+    )
 
 
     emit:
