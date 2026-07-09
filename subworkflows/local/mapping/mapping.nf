@@ -66,14 +66,23 @@ workflow MAPPING {
             }
         }
         .set { in_ch }
+    
+    //join the input channel with the reference channel using original ids
+    in_ch_keyed = in_ch.map { meta, biotype, fastq ->
+        tuple(meta.original_id ?: meta.id, meta, biotype, fastq)
+    }
 
+    ch_ref_keyed = ch_ref.map { meta, ref_name, ref_fasta ->
+        tuple(meta.id, ref_name, ref_fasta)
+    }
 
-    ch_mapping_in = in_ch
-        .join(ch_ref)
-        .map { meta, biotype, fastq, ref_name, ref_fasta ->
+    ch_mapping_in = in_ch_keyed
+        .join(ch_ref_keyed)
+        .map { sample_id, meta, biotype, fastq, ref_name, ref_fasta ->
             def meta_ref = modifyMetaId(meta, 'add_suffix', '', '', "_${ref_name}")
             tuple(meta_ref, biotype, fastq, ref_fasta)
-        }
+    }
+
 
     // Fork based on biotype to run different mapping strategies.
     ch_mapping_in

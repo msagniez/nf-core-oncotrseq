@@ -26,3 +26,7 @@
 	path = modules/local/wf-modules
 	url = https://github.com/chusj-pigu/wf-modules
 	branch = samtools
+[submodule "modules/local/ontime"]
+	path = modules/local/ontime
+	url = https://github.com/chusj-pigu/wf-modules
+	branch = ontime

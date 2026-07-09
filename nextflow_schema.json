@@ -231,9 +231,9 @@
             "default": false
         },
         "downsamp": {
-            "type": "boolean",
-            "description": "Turn on downsampling of input files",
-            "default": false
+            "type": "string",
+            "description": "String of hourly timepoints for downsampling (1h or 1h,2h,72h,FULL)",
+            "default": null
         },
         "ref_genome": {
             "type": "string",
