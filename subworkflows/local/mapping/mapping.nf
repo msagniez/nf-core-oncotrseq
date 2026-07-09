@@ -10,7 +10,8 @@
     IMPORT MODULES / SUBWORKFLOWS / FUNCTIONS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-include { MINIMAP2_ALIGN                         } from '../../../modules/local/minimap2/main.nf'                   // minimap2 alignment
+include { MINIMAP2_ALIGN as MINIMAP2_ALIGN_CDNA } from '../../../modules/local/minimap2/main.nf'                   // minimap2 alignment for cDNA
+include { MINIMAP2_ALIGN as MINIMAP2_ALIGN_DRNA } from '../../../modules/local/minimap2/main.nf'                   // minimap2 alignment for dRNA
 include { SAMTOOLS_TOBAM                         } from '../../../modules/local/samtools/main.nf'                   // Convert SAM to BAM
 include { SAMTOOLS_SORT as SAMTOOLS_SORT         } from '../../../modules/local/samtools/main.nf'                   // Sort BAM
 include { SAMTOOLS_MERGE as SAMTOOLS_MERGE_CHUNK } from '../../../modules/local/samtools/main.nf'                   // Merge BAMs
@@ -42,11 +43,14 @@ workflow MAPPING {
     ch_versions = Channel.empty()
 
     ch_ref = ref
-        .map { meta, ref, ref_fasta, _ref_fai ->
-            tuple(meta, ref_fasta) }
+        .map { meta, ref_name, ref_fasta, _ref_fai ->
+            tuple(meta, ref_name, ref_fasta) }
+
+    SEQKIT_STATS(in_ch.map { meta, biotype, reads -> tuple(meta, reads) })
+    ch_seqkit_out = SEQKIT_STATS.out.stats
 
     in_ch
-        .map { meta, reads ->
+        .map { meta, biotype, reads ->
             // Ensure 'reads' is a list and flatten it
             def dir_list = reads instanceof List ? reads.flatten() : [reads]
             def dir = file(dir_list[0])
@@ -56,57 +60,72 @@ workflow MAPPING {
                 def files = dir.listFiles().findAll { f ->
                     f.name ==~ /.*\.(fastq|fq)(\.gz)?$/
                 }
-                return tuple(meta, files)
+                return tuple(meta, biotype, files)
             } else {
-                return tuple(meta, [dir])
+                return tuple(meta, biotype, [dir])
             }
         }
         .set { in_ch }
 
-    in_ch.view { "Input channel: ${it}" }
-    ch_ref.view { "Reference channel: ${it}" }
 
     ch_mapping_in = in_ch
         .join(ch_ref)
-        //.map { meta, fastq, ref, ref_fasta ->
-        //    def meta_ref = modifyMetaId(meta, 'add_suffix', '', '', "_${ref}")
-        //    tuple(meta_ref, fastq, ref_fasta)
-        //    }
+        .map { meta, biotype, fastq, ref_name, ref_fasta ->
+            def meta_ref = modifyMetaId(meta, 'add_suffix', '', '', "_${ref_name}")
+            tuple(meta_ref, biotype, fastq, ref_fasta)
+        }
 
-    ch_mapping_in.view { "Mapping input channel: ${it}" }
+    // Fork based on biotype to run different mapping strategies.
+    ch_mapping_in
+        .branch { meta, biotype, fastq, ref_fasta ->
+            drna: biotype == 'drna'
+            cdna: true
+        }
+        .set { ch_branched }
+
+    ch_mapping_drna = ch_branched.drna
+    ch_mapping_cdna = ch_branched.cdna
 
     // Run minimap2 alignment
-    MINIMAP2_ALIGN(ch_mapping_in)
+    MINIMAP2_ALIGN_CDNA(ch_mapping_cdna.map { meta, biotype, fastq, ref_fasta -> tuple(meta, fastq, ref_fasta) })
+    MINIMAP2_ALIGN_DRNA(ch_mapping_drna.map { meta, biotype, fastq, ref_fasta -> tuple(meta, fastq, ref_fasta) })
+
+    //Merge channels back together
+    ch_mapping_out = Channel.empty()
+    ch_mapping_out = MINIMAP2_ALIGN_CDNA.out.sam
+        .mix(MINIMAP2_ALIGN_DRNA.out.sam)
 
     // Convert SAM to BAM
-    SAMTOOLS_TOBAM(MINIMAP2_ALIGN.out.sam)
+    SAMTOOLS_TOBAM(ch_mapping_out)
     // Sort and index BAM
     SAMTOOLS_SORT(SAMTOOLS_TOBAM.out.bamfile)
     SAMTOOLS_INDEX_FULL(SAMTOOLS_SORT.out.sortedbam)
 
     // Restore meta ID by removing ref id
-
     ch_ref_id = ch_ref
         .map { meta, ref, _ref_fasta ->
             def meta_ref = modifyMetaId(meta, 'add_suffix', '', '', "_${ref}")
-            tuple(meta_ref, meta.id) }
-
+            tuple(meta_ref, meta.id)
+        }
+    
     bam_ch = SAMTOOLS_INDEX_FULL.out.bamfile_index
         .join(ch_ref_id)
         .map { meta, bam, bai, meta_restore ->
-            tuple(id:meta_restore, bam, bai) }
+            tuple(id:meta_restore, bam, bai)
+        }
 
     // Compute coverage stats
     CRAMINO_STATS(bam_ch)
 
     // Collect versions from all modules
-    ch_versions = MINIMAP2_ALIGN.out.versions
+    ch_versions = MINIMAP2_ALIGN_CDNA.out.versions
+        .mix(MINIMAP2_ALIGN_DRNA.out.versions)
         .mix(SAMTOOLS_TOBAM.out.versions)
         .mix(SAMTOOLS_SORT.out.versions)
         .mix(SAMTOOLS_INDEX_FULL.out.versions)
         .mix(CRAMINO_STATS.out.versions)
 
-    
+
     emit:
     bam      = bam_ch                                 // Final sorted BAM with index
     coverage = CRAMINO_STATS.out.stats                // Coverage stats

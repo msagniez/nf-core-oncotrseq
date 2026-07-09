@@ -31,7 +31,7 @@ workflow ONCOTRSEQ {
 
 
     ch_samplesheet = samplesheet_fastq.map { meta, biotype, tumor_type, input, ref_genome, ref_rna, gtf ->
-        tuple(meta, input)
+        tuple(meta, biotype, input)
     }
 
 
