@@ -7,8 +7,9 @@ include { paramsSummaryMap          } from 'plugin/nf-schema'
 include { softwareVersionsToYAML    } from '../subworkflows/nf-core/utils_nfcore_pipeline'
 include { methodsDescriptionText    } from '../subworkflows/local/utils_nfcore_oncotrseq_pipeline'
 include { modifyMetaId              } from '../subworkflows/local/utils_nfcore_oncotrseq_pipeline'
-include { MAPPING                   } from '../subworkflows/local/mapping/mapping.nf'
 include { DOWNSAMPLE                } from '../subworkflows/local/downsample/downsample.nf'
+include { MAPPING                   } from '../subworkflows/local/mapping/mapping.nf'
+include { QUANTIFYING               } from '../subworkflows/local/quantifying/quantifying.nf'
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -92,11 +93,41 @@ workflow ONCOTRSEQ {
         ch_mapping_input = DOWNSAMPLE.out.reads
     } else {
         ch_mapping_input = ch_samplesheet
+        .map { meta, biotype, input ->
+                meta.original_id = meta.id
+
+
+                tuple(meta, biotype, input)
+            }
     }
 
     MAPPING (
         ch_mapping_input,
         genome_fasta
+    )
+
+    // Join bam, genome_fasta, and ref_classif channels by sample id for quantification
+    quant_ref = genome_fasta
+        .map { meta, ref_name, ref_fasta, ref_fai ->
+            tuple(meta, ref_fasta) }
+        .join(ref_classif
+            .map { meta, ref_fa, ref_gtf, ref_fai ->
+                tuple(meta, ref_gtf) })
+        .map { meta, ref_fasta, ref_gtf ->
+            tuple(meta.id, ref_fasta, ref_gtf) }
+        .join(biotype.map { meta, biotype ->
+            tuple(meta.id, biotype) })
+    
+    quant_in = MAPPING.out.collatedbam
+        .map { meta, collated_bam ->
+            tuple(meta.original_id ?: meta.id, meta, collated_bam) }
+        .combine(quant_ref, by: 0)
+        .map { sample_id, meta, collated_bam, ref_fasta, ref_gtf, biotype ->
+            tuple(meta, biotype,collated_bam, ref_fasta, ref_gtf)
+        }
+    
+    QUANTIFYING (
+        quant_in
     )
 
 

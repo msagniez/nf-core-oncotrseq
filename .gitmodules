@@ -30,3 +30,7 @@
 	path = modules/local/ontime
 	url = https://github.com/chusj-pigu/wf-modules
 	branch = ontime
+[submodule "modules/local/oarfish"]
+	path = modules/local/oarfish
+	url = https://github.com/msagniez/modules_containers
+	branch = oarfish

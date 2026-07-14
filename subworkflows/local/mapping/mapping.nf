@@ -10,10 +10,11 @@
     IMPORT MODULES / SUBWORKFLOWS / FUNCTIONS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-include { MINIMAP2_ALIGN as MINIMAP2_ALIGN_CDNA } from '../../../modules/local/minimap2/main.nf'                   // minimap2 alignment for cDNA
-include { MINIMAP2_ALIGN as MINIMAP2_ALIGN_DRNA } from '../../../modules/local/minimap2/main.nf'                   // minimap2 alignment for dRNA
+include { MINIMAP2_ALIGN as MINIMAP2_ALIGN_CDNA  } from '../../../modules/local/minimap2/main.nf'                   // minimap2 alignment for cDNA
+include { MINIMAP2_ALIGN as MINIMAP2_ALIGN_DRNA  } from '../../../modules/local/minimap2/main.nf'                   // minimap2 alignment for dRNA
 include { SAMTOOLS_TOBAM                         } from '../../../modules/local/samtools/main.nf'                   // Convert SAM to BAM
-include { SAMTOOLS_SORT as SAMTOOLS_SORT         } from '../../../modules/local/samtools/main.nf'                   // Sort BAM
+include { SAMTOOLS_SORT                          } from '../../../modules/local/samtools/main.nf'                   // Sort BAM
+include { SAMTOOLS_COLLATE                       } from '../../../subworkflows/local/utils/samtools_collate.nf'     // Collate BAM
 include { SAMTOOLS_MERGE as SAMTOOLS_MERGE_CHUNK } from '../../../modules/local/samtools/main.nf'                   // Merge BAMs
 include { SAMTOOLS_MERGE as SAMTOOLS_MERGE_FINAL } from '../../../modules/local/samtools/main.nf'                   // Merge BAMs
 include { SAMTOOLS_INDEX as SAMTOOLS_INDEX_FULL  } from '../../../modules/local/samtools/main.nf'                   // Index BAM
@@ -66,7 +67,7 @@ workflow MAPPING {
             }
         }
         .set { in_ch }
-    
+
     //join the input channel with the reference channel using original ids
     in_ch_keyed = in_ch.map { meta, biotype, fastq ->
         tuple(meta.original_id ?: meta.id, meta, biotype, fastq)
@@ -77,12 +78,11 @@ workflow MAPPING {
     }
 
     ch_mapping_in = in_ch_keyed
-        .join(ch_ref_keyed)
+        .combine(ch_ref_keyed, by: 0)
         .map { sample_id, meta, biotype, fastq, ref_name, ref_fasta ->
             def meta_ref = modifyMetaId(meta, 'add_suffix', '', '', "_${ref_name}")
             tuple(meta_ref, biotype, fastq, ref_fasta)
     }
-
 
     // Fork based on biotype to run different mapping strategies.
     ch_mapping_in
@@ -110,36 +110,31 @@ workflow MAPPING {
     SAMTOOLS_SORT(SAMTOOLS_TOBAM.out.bamfile)
     SAMTOOLS_INDEX_FULL(SAMTOOLS_SORT.out.sortedbam)
 
-    // Restore meta ID by removing ref id
-    ch_ref_id = ch_ref
-        .map { meta, ref, _ref_fasta ->
-            def meta_ref = modifyMetaId(meta, 'add_suffix', '', '', "_${ref}")
-            tuple(meta_ref, meta.id)
-        }
-    
     bam_ch = SAMTOOLS_INDEX_FULL.out.bamfile_index
-        .join(ch_ref_id)
-        .map { meta, bam, bai, meta_restore ->
-            tuple(id:meta_restore, bam, bai)
-        }
 
     // Compute coverage stats
     CRAMINO_STATS(bam_ch)
+
+    // Collate bam for downstream oarfish processing
+    SAMTOOLS_COLLATE(SAMTOOLS_TOBAM.out.bamfile)
+
 
     // Collect versions from all modules
     ch_versions = MINIMAP2_ALIGN_CDNA.out.versions
         .mix(MINIMAP2_ALIGN_DRNA.out.versions)
         .mix(SAMTOOLS_TOBAM.out.versions)
         .mix(SAMTOOLS_SORT.out.versions)
+        .mix(SAMTOOLS_COLLATE.out.versions)
         .mix(SAMTOOLS_INDEX_FULL.out.versions)
         .mix(CRAMINO_STATS.out.versions)
 
 
     emit:
-    bam      = bam_ch                                 // Final sorted BAM with index
-    coverage = CRAMINO_STATS.out.stats                // Coverage stats
-    //seqkit   = ch_seqkit_out                          // Input fastq stats
-    versions = ch_versions                            // All tool versions
+    sortedbam      = bam_ch                             // Final sorted BAM with index
+    collatedbam    = SAMTOOLS_COLLATE.out.collatedbam   // Collated BAM
+    coverage       = CRAMINO_STATS.out.stats            // Coverage stats
+    seqkit         = ch_seqkit_out                      // Input fastq stats
+    versions       = ch_versions                        // All tool versions
 }
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
