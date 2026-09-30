@@ -11,7 +11,6 @@
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
 include { OARFISH_QUANTIFY_GENOMEALIGNMENTPROJECTION  } from '../../../modules/local/oarfish/main.nf'                   // oarfish quantification from genomic alignments
-include { modifyMetaId                                } from '../utils_nfcore_oncotrseq_pipeline'
 include { QUARTO_TABLE                                } from '../../../modules/local/quarto/main.nf'                     // Reporting (optional)
 include { paramsSummaryMap                            } from 'plugin/nf-schema'                                          // Parameter summary
 include { paramsSummaryMultiqc                        } from '../../../subworkflows/nf-core/utils_nfcore_pipeline'       // MultiQC summary

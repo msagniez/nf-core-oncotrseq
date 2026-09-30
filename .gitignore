@@ -10,3 +10,8 @@ null/
 test_data/
 test_results/
 test_*
+/test_data/
+*.fastq.gz
+*.fast5
+*.pod5
+*.bam

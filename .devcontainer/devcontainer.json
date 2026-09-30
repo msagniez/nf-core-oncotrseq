@@ -3,6 +3,10 @@
     "image": "nfcore/gitpod:latest",
     "remoteUser": "gitpod",
     "runArgs": ["--privileged"],
+    "mounts": [
+        "source=${localEnv:HOME}/test_data/oncotrseq_test,target=/workspaces/test_data/oncotrseq_test,type=bind,consistency=cached",
+        "source=${localEnv:HOME}/test_data/ref_test,target=/workspaces/test_data/ref_test,type=bind,consistency=cached"
+    ],
 
     // Configure tool-specific properties.
     "customizations": {

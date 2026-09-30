@@ -21,8 +21,8 @@ include { SAMTOOLS_INDEX as SAMTOOLS_INDEX_FULL  } from '../../../modules/local/
 include { SAMTOOLS_TOFASTQ                       } from '../../../modules/local/samtools/main.nf'
 include { CRAMINO_STATS                          } from '../../../modules/local/cramino/main.nf'
 include { SEQKIT_STATS                           } from '../../../modules/local/seqkit/main.nf'                     // Coverage stats
-include { modifyMetaId                           } from '../utils_nfcore_oncotrseq_pipeline'
-include { QUARTO_TABLE                           } from '../../../modules/local/quarto/main.nf'                     // Reporting (optional)
+include { QUARTO_TABLE_COLNAMES as QUARTO_TABLE1 } from '../../../modules/local/quarto/main.nf'
+include { QUARTO_SECTION                         } from '../../../modules/local/quarto/main.nf'
 include { paramsSummaryMap                       } from 'plugin/nf-schema'                                          // Parameter summary
 include { paramsSummaryMultiqc                   } from '../../../subworkflows/nf-core/utils_nfcore_pipeline'       // MultiQC summary
 include { softwareVersionsToYAML                 } from '../../../subworkflows/nf-core/utils_nfcore_pipeline'       // Version reporting
@@ -68,19 +68,13 @@ workflow MAPPING {
         }
         .set { in_ch }
 
-    //join the input channel with the reference channel using original ids
-    in_ch_keyed = in_ch.map { meta, biotype, fastq ->
-        tuple(meta.original_id ?: meta.id, meta, biotype, fastq)
-    }
-
-    ch_ref_keyed = ch_ref.map { meta, ref_name, ref_fasta ->
-        tuple(meta.id, ref_name, ref_fasta)
-    }
+    in_ch_keyed  = in_ch.map { meta, biotype, fastq -> tuple(meta.id, meta, biotype, fastq) }
+    ch_ref_keyed = ch_ref.map { meta, ref_name, ref_fasta -> tuple(meta.id, ref_name, ref_fasta) }
 
     ch_mapping_in = in_ch_keyed
         .combine(ch_ref_keyed, by: 0)
         .map { sample_id, meta, biotype, fastq, ref_name, ref_fasta ->
-            def meta_ref = modifyMetaId(meta, 'add_suffix', '', '', "_${ref_name}")
+            def meta_ref = meta + [ref_name: ref_name]
             tuple(meta_ref, biotype, fastq, ref_fasta)
     }
 
@@ -119,7 +113,96 @@ workflow MAPPING {
     SAMTOOLS_COLLATE(SAMTOOLS_TOBAM.out.bamfile)
 
 
-    // Collect versions from all modules
+    /*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    TABLE INPUT
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
+
+    // Get only necessary lines from cramino summary
+
+    def desired_stats = [
+    'Number of alignments',
+    '% from total alignments',
+    'Yield [Gb]',
+    'Mean coverage',
+    'N50',
+    'Mean length',
+    'Mean identity'
+    ]
+
+    ch_cramino_parsed = CRAMINO_STATS.out.stats
+        .map { meta, table ->
+            def stats = table.readLines()
+                .findAll { it.contains('\t') }
+                .collectEntries { line ->
+                    def parts = line.split('\t', 2)
+                    [(parts[0]): parts[1]]
+                }
+            tuple(meta, stats)
+        }
+
+    ch_mean_coverage = ch_cramino_parsed
+        .map { meta, stats -> tuple(meta, stats['Mean coverage'] ?: 'NA') }
+
+    ch_cramino_summary = ch_cramino_parsed
+    .map { meta, stats ->
+        def project = file(params.outdir).name
+        tuple(project, meta, stats)
+    }
+    .collectFile(sort: true) { project, meta, stats ->
+        def sample  = meta.timepoint ? "${meta.id}_${meta.timepoint}" : meta.id
+        def refname = meta.ref_name.toString().replaceAll(/\.(fa|fasta)(\.gz)?$/, '')
+        def row = ([sample, refname] + desired_stats.collect { stats[it] ?: 'NA' }).join('\t')
+        return [ "${project}_mapping_stats.tsv", "${row}\n" ]
+    }
+
+    ch_quarto_table = ch_cramino_summary
+        .map { table ->
+            def meta_project = table.name.replace('_mapping_stats.tsv', '')
+            tuple(id: meta_project, table)
+        }
+        .map { meta, table ->
+            def caption   = "Summary mapping stats for ${meta.id} on BAM files"
+            def col_names = "Sample, Ref, # Alignments, % from total alignments, Yield [Gb], Mean Coverage, N50, Mean length, Mean identity"
+            def section   = "Mapping_QC"
+            def process   = "mapping-qc-${meta.id}"
+            tuple(meta, table, caption, col_names, section, process)
+        }
+    
+
+    QUARTO_TABLE1(
+        ch_quarto_table
+        )
+
+    ch_section_inputs = QUARTO_TABLE1.out.quarto_table
+
+
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    QUARTO_SECTION
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
+
+    ch_section_description = channel.of("Summary Statistics for BAM files")
+
+    ch_section_inputs = ch_section_inputs
+        .groupTuple()
+        .map { id, section, filePaths ->
+            [id, section[0], filePaths]
+        }.combine(ch_section_description)
+
+    QUARTO_SECTION(
+        ch_section_inputs
+    )
+
+    ch_section = QUARTO_SECTION.out.quarto_section
+
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    COLLECT VERSIONS
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
     ch_versions = MINIMAP2_ALIGN_CDNA.out.versions
         .mix(MINIMAP2_ALIGN_DRNA.out.versions)
         .mix(SAMTOOLS_TOBAM.out.versions)
@@ -127,6 +210,8 @@ workflow MAPPING {
         .mix(SAMTOOLS_COLLATE.out.versions)
         .mix(SAMTOOLS_INDEX_FULL.out.versions)
         .mix(CRAMINO_STATS.out.versions)
+        .mix(QUARTO_TABLE1.out.versions)
+        .mix(QUARTO_SECTION.out.versions)
 
 
     emit:
@@ -134,6 +219,7 @@ workflow MAPPING {
     collatedbam    = SAMTOOLS_COLLATE.out.collatedbam   // Collated BAM
     coverage       = CRAMINO_STATS.out.stats            // Coverage stats
     seqkit         = ch_seqkit_out                      // Input fastq stats
+    section        = QUARTO_SECTION.out.quarto_section  // Quarto section for mapping stats
     versions       = ch_versions                        // All tool versions
 }
 /*

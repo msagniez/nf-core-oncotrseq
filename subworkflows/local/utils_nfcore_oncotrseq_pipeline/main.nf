@@ -28,6 +28,13 @@ include { SAMTOOLS_FAIDX as SAMTOOLS_FAIDX_CLASSIF } from '../../../modules/loca
 // File extensions used to decide whether an input row is raw reads (fastq)
 // or an already-quantified matrix. No basecalling happens in this pipeline,
 // so this is purely a routing decision for downstream classification.
+//
+// `input_file` in the samplesheet may point to either:
+//   - a single fastq file (matched against FASTQ_EXTENSIONS_REGEX), or
+//   - a directory containing one or more fastq files, or
+//   - a single matrix file (matched against MATRIX_EXTENSIONS_REGEX).
+// Directories are only ever treated as fastq input - a matrix is always a
+// single file.
 def FASTQ_EXTENSIONS_REGEX  = /.*\.(fastq|fq)(\.gz)?$/
 def MATRIX_EXTENSIONS_REGEX = /.*\.(csv|tsv)(\.gz)?$/
 
@@ -125,14 +132,40 @@ workflow PIPELINE_INITIALISATION {
     }
 
     //
+    // Resolve a fastq `input_file` value that may be either a single fastq file
+    // or a directory containing one or more fastq files. Directories are searched
+    // non-recursively and every matching file is returned, sorted by name so that
+    // ordering (e.g. R1/R2, lane splits) is deterministic across runs.
+    //
+    def resolveFastqInput = { input_file, meta ->
+        if (!input_file.isDirectory()) {
+            return input_file
+        }
+
+        def fastqs = input_file
+            .listFiles()
+            ?.findAll { it.isFile() && it.name ==~ FASTQ_EXTENSIONS_REGEX }
+            ?.sort { it.name }
+
+        if (!fastqs) {
+            throw new IllegalArgumentException(
+                "No fastq files (.fastq/.fq[.gz]) found in directory '${input_file}' for sample '${meta.id}'"
+            )
+        }
+
+        return fastqs
+    }
+
+    //
     // Parse samplesheet once and validate every row:
-    //   - the input file (fastq or matrix) must exist
+    //   - the input file (fastq file, fastq directory, or matrix) must exist
     //   - biotype must be 'cdna' or 'drna'
-    //   - the input file extension must match either a fastq or a matrix pattern
+    //   - the input must match either a fastq file, a fastq directory, or a matrix file
     //   - ref_classif and gtf are mandatory and resolved to existing files
     //     (full path as given, or filename looked up in --ref_dir)
     // Expected columns: meta, biotype, tumor_type, input_file, ref_genome, ref_classif, gtf
-    // `input_file` is either a fastq (raw reads) or a quantification matrix.
+    // `input_file` is either a fastq (raw reads: single file or directory of files)
+    // or a quantification matrix (single file).
     //
     ch_samplesheet_raw = channel
         .fromList(samplesheetToList(params.input, "${projectDir}/assets/schema_input.json"))
@@ -150,14 +183,19 @@ workflow PIPELINE_INITIALISATION {
                 )
             }
 
-            def is_fastq  = input_file.name ==~ FASTQ_EXTENSIONS_REGEX
-            def is_matrix = input_file.name ==~ MATRIX_EXTENSIONS_REGEX
+            def is_dir    = input_file.isDirectory()
+            def is_fastq  = is_dir || (input_file.name ==~ FASTQ_EXTENSIONS_REGEX)
+            def is_matrix = !is_dir && (input_file.name ==~ MATRIX_EXTENSIONS_REGEX)
             if (!is_fastq && !is_matrix) {
                 throw new IllegalArgumentException(
                     "Unsupported input file '${input_file.name}' for sample '${meta.id}': " +
-                    "expected a fastq (.fastq/.fq[.gz]) or a matrix (.csv/.tsv[.gz])"
+                    "expected a fastq file/directory (.fastq/.fq[.gz]) or a matrix (.csv/.tsv[.gz])"
                 )
             }
+
+            // For a directory, expand to the list of fastq files it contains.
+            // For a single file (fastq or matrix), pass it through unchanged.
+            def resolved_input_file = is_dir ? resolveFastqInput(input_file, meta) : input_file
 
             // Classification reference (fasta) and its annotation (gtf) are a separate
             // reference from the alignment genome (ref_genome / genome_fasta below),
@@ -165,18 +203,21 @@ workflow PIPELINE_INITIALISATION {
             def resolved_ref_classif = resolveRefFile(ref_classif, 'ref_classif', meta)
             def resolved_gtf         = resolveRefFile(gtf, 'gtf', meta)
 
-            return [ meta, biotype, tumor_type, input_file, ref_genome, resolved_ref_classif, resolved_gtf ]
+            return [ meta, biotype, tumor_type, resolved_input_file, ref_genome, resolved_ref_classif, resolved_gtf ]
         }
 
     //
     // Branch into fastq (needs alignment/quantification before classification)
     // vs matrix (already quantified, goes straight to classification). Extension
-    // was already validated above, so this only routes. ref_classif/gtf are kept
-    // in both branches; only ref_genome (alignment-only) is dropped for matrix.
+    // was already validated above, so this only routes. A resolved fastq directory
+    // comes through as a List<File> (never true for a matrix), so that alone is
+    // enough to route it to the fastq branch without re-checking extensions.
+    // ref_classif/gtf are kept in both branches; only ref_genome (alignment-only)
+    // is dropped for matrix.
     //
     ch_samplesheet_raw
         .branch { meta, biotype, tumor_type, input_file, ref_genome, ref_classif, gtf ->
-            fastq:  input_file.name ==~ FASTQ_EXTENSIONS_REGEX
+            fastq:  (input_file instanceof List) || (input_file.name ==~ FASTQ_EXTENSIONS_REGEX)
                 return [ meta, biotype, tumor_type, input_file, ref_genome, ref_classif, gtf ]
             matrix: true
                 return [ meta, biotype, tumor_type, input_file, ref_classif, gtf ]
@@ -390,11 +431,11 @@ workflow PIPELINE_INITIALISATION {
 
 
     emit:
-    fastq                        = ch_samplesheet_fastq
-    matrix                       = ch_samplesheet_matrix
-    genome_fasta                 = ch_genome_final          // (meta, ref, fasta, fai)        - alignment genome, fastq only
+    fastq                        = ch_samplesheet_fastq      // (meta, biotype, tumor_type, input_file, ref_genome, ref_classif, gtf) - fastq samples only
+    matrix                       = ch_samplesheet_matrix     // (meta, biotype, tumor_type, input_file, ref_classif, gtf) - matrix samples only for skip_quantification entry
+    genome_fasta                 = ch_genome_final           // (meta, ref, fasta, fai)        - alignment genome, fastq only
     ref_classif                  = ch_classif_final          // (meta, fasta, gtf, fai)   - classification reference, all samples
-    biotype                      = ch_biotype
+    biotype                      = ch_biotype                // (meta, biotype)           - biotype per sample
     versions                     = ch_versions
 }
 

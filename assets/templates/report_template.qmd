@@ -1,0 +1,69 @@
+---
+title: "MPGI-Sequencing-Report"
+author: "CHUSJ-MPGI"
+date: now
+date-format: YYYY-MM-DDTHH:mm:ssZ
+format:
+    html:
+        theme: simplex
+        self-contained: true
+        title-block-banner: "#00008B"
+        title-block-banner-color: "#FFFFFF"
+        cap-location: bottom
+        page-layout: full
+        toc: true
+        toc-depth: 4
+        scrollable: true
+        sidebar: false
+params:
+  report_title: "Default Workflow"
+  report_description: "A cool analysis of X using y"
+---
+
+
+``` {=css}
+/*| echo: false */
+
+caption {
+  margin: auto;
+  text-align: justify;
+}
+
+table {
+    display: block;
+    max-height: 500px; /* Adjust height as needed */
+    overflow-y: auto;
+    overflow-x: auto;
+    border-collapse: collapse;
+}
+
+caption {
+    caption-side: top; /* Ensures the caption stays at the top */
+    font-weight: bold;
+    padding-bottom: 10px;
+}
+
+thead {
+    position: sticky;
+    top: 0;
+    background: white;
+    z-index: 1;
+}
+
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 8,
+  fig.height = 6,
+  dpi = 300
+)
+```
+
+#  `r params$report_title`
+
+#### `r params$report_description`
