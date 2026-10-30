@@ -10,6 +10,7 @@ include { CAT_FASTQ                 } from '../modules/local/utils/cat_fastq.nf'
 include { DOWNSAMPLE                } from '../subworkflows/local/downsample/downsample.nf'
 include { MAPPING                   } from '../subworkflows/local/mapping/mapping.nf'
 include { QUANTIFYING               } from '../subworkflows/local/quantifying/quantifying.nf'
+include { CLASSIFYING                } from '../subworkflows/local/classifying/classifying.nf'
 include { QUARTO_TEXT               } from '../modules/local/quarto/main.nf'
 include { QUARTO_SECTION            } from '../modules/local/quarto/main.nf'
 include { QUARTO_REPORT             } from '../modules/local/quarto/main.nf'
@@ -137,24 +138,18 @@ workflow ONCOTRSEQ {
             .combine(samplesheet_fastq.map { meta, biotype, tumor_type, input, ref_genome, ref_rna, gtf -> tuple(meta.id, biotype, tumor_type, ref_genome, ref_rna, gtf) }, by: 0)
             .map { sample_id, meta, quant, biotype, tumor_type, ref_genome, ref_rna, gtf ->
                 def meta_c = [id: "${meta.id}_${meta.timepoint}_${meta.ref_name}_${meta.ref_gtf}"]
-                tuple(meta_c, biotype, tumor_type, quant, ref_rna, gtf)
+                def quantifier = meta.quantifier
+                tuple(meta_c, biotype, tumor_type, quant, ref_rna, gtf, quantifier)
             }
     }
 
-    // Fork based on tumor_type to run different classification strategies.
-    ch_classif_forked = classif_in
-        .branch { meta, biotype, tumor_type, quant, ref_rna, gtf ->
-            all: tumor_type == 'all'
-            aml: tumor_type == 'aml'
-            cascade: tumor_type == 'cascade'
-            other: true
-        }
-        .set { ch_classif }
 
-    ch_classif.all.view()
+    CLASSIFYING (
+        classif_in
+    )
     
 
-    /*
+/*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     Collect sections for report
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

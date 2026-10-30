@@ -34,3 +34,15 @@
 	path = modules/local/oarfish
 	url = https://github.com/msagniez/modules_containers
 	branch = oarfish
+[submodule "modules/local/tximport"]
+	path = modules/local/tximport
+	url = https://github.com/msagniez/modules_containers.git
+	branch = tximport
+[submodule "modules/local/mnm"]
+	path = modules/local/mnm
+	url = https://github.com/msagniez/modules_containers.git
+	branch = MnM
+[submodule "modules/local/MnM"]
+	path = modules/local/MnM
+	url = https://github.com/msagniez/modules_containers.git
+	branch = MnM
